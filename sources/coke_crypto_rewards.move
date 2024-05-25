@@ -1,4 +1,3 @@
-
 module coke_crypto_rewards::coke_crypto_rewards {
 
     use sui::event;
@@ -7,18 +6,16 @@ module coke_crypto_rewards::coke_crypto_rewards {
     use sui::coin::{Self, Coin};
     use sui::balance::{Self, Balance};
 
-    // Errors record
     const E_Not_Valid_Company : u64 = 1;
     const E_Invalid_WithdrawalAmount : u64 = 2;
-
     const E_Invalid_VoucherText : u64 = 3;
-    const E_Declined_Voucher : u64 = 4; // voucher declined when Customer to reedem voucher that was not listed
+    const E_Declined_Voucher : u64 = 4;
     const E_Invalid_Customer : u64 = 5;
     const E_Invalid_Transfer_Amount : u64 = 6;
+    const E_Invalid_VoucherIndex : u64 = 7;
+    const E_CustomerAlreadyExists : u64 = 8;
 
-    // Structs //
-
-    public struct Voucher has key, store{
+    public struct Voucher has key, store {
         id: UID,
         company_id: ID,
         text: String,
@@ -26,12 +23,13 @@ module coke_crypto_rewards::coke_crypto_rewards {
         activated: bool,
     }
 
-    public struct Customer has key, store{
+    public struct Customer has key, store {
         id: UID,
         company_id: ID,
-        voucher_count: u64, // number of vouchers owned by the customer
+        voucher_count: u64,
         customer_address: address,
     }
+
     public struct Company has key {
         id: UID,
         name: String,
@@ -43,7 +41,6 @@ module coke_crypto_rewards::coke_crypto_rewards {
         company_address: address,
     }
 
-    // Events //
     public struct CompanyCreated has copy, drop {
         company_id: ID,
     }
@@ -79,41 +76,33 @@ module coke_crypto_rewards::coke_crypto_rewards {
         customer_id: ID,
     }
 
-
     public struct CompanyWithdrawal has copy, drop {
         company_id: ID,
         amount: u64,
         recipient: address,
     }
 
-    // Functions //
-  
-
-    // Create a new company
     public fun create_company(company_address: address, ctx: &mut TxContext) {
         let company_uid = object::new(ctx);
         let company_id = object::uid_to_inner(&company_uid);
 
         transfer::share_object(Company {
             id: company_uid,
-            name:  string::utf8(b"Coke Company"),
+            name: string::utf8(b"Coke Company"),
             balance: balance::zero<SUI>(),
             vouchers: vector::empty(),
             voucher_count: 0,
             customers: vector::empty(),
             customer_count: 0,
-            company_address,
-
+            company_address: company_address,
         });
 
-        event::emit(CompanyCreated{
+        event::emit(CompanyCreated {
             company_id
-        })
+        });
     }
 
-    // Company to create a new voucher
-    public fun create_voucher(ctx: &mut TxContext,company: &mut Company, company_id: ID, text: vector<u8>, value: u64) {
-        // verify that the company is making the request
+    public fun create_voucher(ctx: &mut TxContext, company: &mut Company, company_id: ID, text: vector<u8>, value: u64) {
         assert!(tx_context::sender(ctx) == company.company_address, E_Not_Valid_Company);
 
         let voucher_uid = object::new(ctx);
@@ -127,80 +116,71 @@ module coke_crypto_rewards::coke_crypto_rewards {
             activated: false
         };
 
-        company.vouchers.push_back(voucher);
-
+        vector::push_back(&mut company.vouchers, voucher);
         company.voucher_count = company.voucher_count + 1;
 
-        event::emit(VoucherCreated{
+        event::emit(VoucherCreated {
             company_id,
             voucher_id
         });
     }
 
-
-    // Company to activate a voucher
-    public fun activate_voucher(ctx: &mut TxContext, company: &mut Company, company_id: ID, voucher_index:u64, voucher_id: ID) {
-        // verify that the company is making the request
+    public fun activate_voucher(ctx: &mut TxContext, company: &mut Company, company_id: ID, voucher_index: u64, voucher_id: ID) {
         assert!(tx_context::sender(ctx) == company.company_address, E_Not_Valid_Company);
+        assert!(voucher_index < vector::length(&company.vouchers), E_Invalid_VoucherIndex);
 
         let voucher = vector::borrow_mut(&mut company.vouchers, voucher_index);
-
         voucher.activated = true;
 
-        event::emit(VoucherActivated{
+        event::emit(VoucherActivated {
             company_id,
             voucher_id
         });
-
     }
 
-    // Company to deactivate a voucher
     public fun deactivate_voucher(ctx: &mut TxContext, company: &mut Company, company_id: ID, voucher_id: ID, voucher_index: u64) {
-        // verify that the company is making the request
         assert!(tx_context::sender(ctx) == company.company_address, E_Not_Valid_Company);
+        assert!(voucher_index < vector::length(&company.vouchers), E_Invalid_VoucherIndex);
 
         let voucher = vector::borrow_mut(&mut company.vouchers, voucher_index);
-
         voucher.activated = false;
 
-        event::emit(VoucherDeactivated{
+        event::emit(VoucherDeactivated {
             company_id,
             voucher_id
         });
-
     }
 
-    // company to add funds to the balance
     public fun add_funds(ctx: &mut TxContext, company: &mut Company, coin: Coin<SUI>) {
-        // verify that the company is making the request
         assert!(tx_context::sender(ctx) == company.company_address, E_Not_Valid_Company);
 
         let balance_ = coin::into_balance(coin);
         balance::join(&mut company.balance, balance_);
     }
 
-    // company to withdraw funds from the balance
     public fun withdraw_funds(ctx: &mut TxContext, company: &mut Company, company_id: ID, amount: u64, recipient: address) {
-        // verify that the company is making the request
         assert!(tx_context::sender(ctx) == company.company_address, E_Not_Valid_Company);
-
-        // check if the company has enough funds to withdraw
         assert!(amount <= balance::value(&company.balance), E_Invalid_WithdrawalAmount);
 
         let coin = coin::take(&mut company.balance, amount, ctx);
         transfer::public_transfer(coin, recipient);
 
-        event::emit(CompanyWithdrawal{
+        event::emit(CompanyWithdrawal {
             company_id,
             amount,
             recipient
         });
     }
 
-    // company to add a customer
     public fun add_customer(ctx: &mut TxContext, company: &mut Company, company_id: ID, customer_address: address) {
-        // verify that the company is making the request
         assert!(tx_context::sender(ctx) == company.company_address, E_Not_Valid_Company);
+
+        let mut i = 0;
+        while (i < vector::length(&company.customers)) {
+            let existing_customer = vector::borrow(&company.customers, i);
+            assert!(existing_customer.customer_address != customer_address, E_CustomerAlreadyExists);
+            i = i + 1;
+        }
 
         let customer_uid = object::new(ctx);
         let customer_id = object::uid_to_inner(&customer_uid);
@@ -212,69 +192,47 @@ module coke_crypto_rewards::coke_crypto_rewards {
             customer_address,
         };
 
-        company.customers.push_back(customer);
-
+        vector::push_back(&mut company.customers, customer);
         company.customer_count = company.customer_count + 1;
 
-        event::emit(CustomerCreated{
+        event::emit(CustomerCreated {
             company_id,
             customer_id
         });
     }
-    
-    // customer tries to redeem a voucher from the company to get the value
+
     public fun redeem_voucher(ctx: &mut TxContext, company: &mut Company, company_id: ID, customer: &mut Customer, customer_id: ID, voucher_id: ID, voucher_text: vector<u8>, voucher_index: u64) {
-        // verify that the customer is making the request
         assert!(tx_context::sender(ctx) == customer.customer_address, E_Invalid_Customer);
+        assert!(voucher_index < vector::length(&company.vouchers), E_Invalid_VoucherIndex);
 
         let voucher = vector::borrow_mut(&mut company.vouchers, voucher_index);
-
-        // check if the voucher is activated
         assert!(voucher.activated, E_Declined_Voucher);
-
-        // check if Voucher.text is same as that voucher_text
         assert!(voucher.text == string::utf8(voucher_text), E_Invalid_VoucherText);
-
-     
-        // check that the company has enough funds to transfer
         assert!(voucher.value <= balance::value(&company.balance), E_Invalid_Transfer_Amount);
-        // Transfer the value of the voucher to the customer
+
         let transfer_amount = coin::take(&mut company.balance, voucher.value, ctx);
         transfer::public_transfer(transfer_amount, customer.customer_address);
 
-      
-
-        // deactivate the voucher
         voucher.activated = false;
-
-        // add the count of the voucher to the customer's voucher count
         customer.voucher_count = customer.voucher_count + 1;
 
-
-     
-
-        event::emit(VoucherRedeemed{
+        event::emit(VoucherRedeemed {
             company_id,
             voucher_id,
             customer_id
         });
     }
 
-
-    // company to decline a voucher
     public fun decline_voucher(ctx: &mut TxContext, company: &mut Company, company_id: ID, voucher_id: ID, voucher_index: u64) {
-        // verify that the company is making the request
         assert!(tx_context::sender(ctx) == company.company_address, E_Not_Valid_Company);
+        assert!(voucher_index < vector::length(&company.vouchers), E_Invalid_VoucherIndex);
 
         let voucher = vector::borrow_mut(&mut company.vouchers, voucher_index);
-
-        // deactivate the voucher
         voucher.activated = false;
 
-        event::emit(VoucherDeclined{
+        event::emit(VoucherDeclined {
             company_id,
             voucher_id
         });
     }
-
 }
